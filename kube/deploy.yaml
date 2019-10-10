@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp
+spec:
+  selector:
+    matchLabels:
+      app: mcp
+  template:
+    metadata:
+      labels:
+        app: mcp
+    spec:
+      containers:
+      - name: mcp
+        imagePullPolicy: Always
+        image: gcr.io/howardjohn-istio/nacos-mcp
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 5000m
+            memory: 5000M
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp
+  labels:
+    app: mcp
+spec:
+  ports:
+  - port: 18848
+    name: grpc
+  selector:
+    app: mcp
