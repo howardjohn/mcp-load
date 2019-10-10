@@ -8,13 +8,18 @@ spec:
       app: mcp
   template:
     metadata:
+      annotations:
+        sidecar.istio.io/inject: "false"
       labels:
         app: mcp
     spec:
       containers:
       - name: mcp
         imagePullPolicy: Always
-        image: gcr.io/howardjohn-istio/nacos-mcp
+        image: gcr.io/howardjohn-istio/mcp-load
+        args:
+        - --services=10
+        - --delay=10
         resources:
           requests:
             cpu: 100m

@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/nacos-group/nacos-istio/common"
-	"github.com/nacos-group/nacos-istio/nacos"
+	"github.com/gogo/protobuf/types"
+	"github.com/nacos-group/nacos-sdk-go/model"
+	"istio.io/api/networking/v1alpha3"
+
+	"github.com/howardjohn/mcp-load/common"
 
 	ads "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v2"
 	"github.com/gogo/protobuf/proto"
@@ -43,10 +47,9 @@ var (
 
 // typeHandler is called when a request for a type is first received.
 // It should send the list of resources on the connection.
-type typeHandler func(s *NacosMcpService, con *Connection, rtype string, res []string) error
+type typeHandler func(s *McpService, con *Connection, rtype string, res []string) error
 
-//
-type NacosMcpService struct {
+type McpService struct {
 	grpcServer *grpc.Server
 
 	// mutex used to modify structs, non-blocking code only.
@@ -58,7 +61,7 @@ type NacosMcpService struct {
 
 	connectionNumber int
 
-	nacosPushService *nacos.MockNacosService
+	service *MockService
 }
 
 type Connection struct {
@@ -99,45 +102,167 @@ type Connection struct {
 	LastRequestTime int64
 }
 
+/**
+ * Mocked service that sends whole set of services after a fixed delay.
+ * This service tries to measure the performance of Pilot and the MCP protocol.
+ */
+type MockService struct {
+	// Running configurations:
+	MockParams common.MockParams
+	callbacks  []func(resources *v1alpha1.Resources, err error)
+	// All mocked services:
+	Resources *v1alpha1.Resources
+}
+
+func (mockService *MockService) SubscribeAllServices(SubscribeCallback func(resources *v1alpha1.Resources, err error)) {
+	mockService.callbacks = append(mockService.callbacks, SubscribeCallback)
+}
+
+func (mockService *MockService) SubscribeService(ServiceName string, SubscribeCallback func(endpoints []model.SubscribeService, err error)) {
+
+}
+
+/**
+ * Construct all services that will be pushed to Istio
+ */
+func (mockService *MockService) constructServices() {
+
+	mockService.Resources = &v1alpha1.Resources{
+		Collection: "istio/networking/v1alpha3/serviceentries",
+	}
+
+	port := &v1alpha3.Port{
+		Number:   8080,
+		Protocol: "HTTP",
+		Name:     "http",
+	}
+
+	totalInstanceCount := 0
+
+	labels := make(map[string]string)
+	labels["p"] = "hessian2"
+	labels["ROUTE"] = "0"
+	labels["APP"] = "ump"
+	labels["st"] = "na62"
+	labels["v"] = "2.0"
+	labels["TIMEOUT"] = "3000"
+	labels["ih2"] = "y"
+	labels["mg"] = "ump2_searchhost"
+	labels["WRITE_MODE"] = "unit"
+	labels["CONNECTTIMEOUT"] = "1000"
+	labels["SERIALIZETYPE"] = "hessian"
+	labels["ut"] = "UNZBMIX25G"
+
+	for count := 0; count < mockService.MockParams.MockServiceCount; count++ {
+
+		svcName := "mock.service." + strconv.Itoa(count)
+		se := &v1alpha3.ServiceEntry{
+			Hosts:      []string{svcName + ".nacos"},
+			Resolution: v1alpha3.ServiceEntry_DNS,
+			Location:   1,
+			Ports:      []*v1alpha3.Port{port},
+		}
+
+		rand.Seed(time.Now().Unix())
+
+		instanceCount := rand.Intn(mockService.MockParams.MockAvgEndpointCount) + mockService.MockParams.MockAvgEndpointCount/2
+
+		totalInstanceCount += instanceCount
+
+		for i := 0; i < instanceCount; i++ {
+
+			ip := fmt.Sprintf("%d.%d.%d.%d",
+				byte(i>>24), byte(i>>16), byte(i>>8), byte(i))
+
+			endpoint := &v1alpha3.ServiceEntry_Endpoint{
+				Labels: labels,
+			}
+
+			endpoint.Address = ip
+			endpoint.Ports = map[string]uint32{
+				"http": uint32(8080),
+			}
+
+			se.Endpoints = append(se.Endpoints, endpoint)
+		}
+
+		seAny, err := types.MarshalAny(se)
+		if err != nil {
+			continue
+		}
+
+		res := v1alpha1.Resource{
+			Body: seAny,
+			Metadata: &v1alpha1.Metadata{
+				Annotations: map[string]string{
+					"virtual": "1",
+				},
+				Name: "nacos" + "/" + svcName, // goes to model.Config.Name and Namespace - of course different syntax
+			},
+		}
+
+		mockService.Resources.Resources = append(mockService.Resources.Resources, res)
+	}
+
+	log.Println("Generated", mockService.MockParams.MockServiceCount, "services.")
+	log.Println("Total instance count", totalInstanceCount)
+}
+
+func (mockService *MockService) notifyServiceChange() {
+	//
+	//resources := &v1alpha1.Resources{
+	//	Collection: "istio/networking/v1alpha3/serviceentries",
+	//}
+
+	for {
+
+		for _, callback := range mockService.callbacks {
+			callback(mockService.Resources, nil)
+		}
+
+		time.Sleep(time.Duration(mockService.MockParams.MockPushDelay) * time.Second)
+	}
+}
+
 // NewService initialized MCP servers.
-func NewService(addr string, mockParams common.MockParams) *NacosMcpService {
+func NewService(addr string, mockParams common.MockParams) *McpService {
 
-	// default is mocked:
-	pushService := &nacos.MockNacosService{
+	pushService := &MockService{
 		MockParams: mockParams,
+		callbacks:  []func(resources *v1alpha1.Resources, err error){},
 	}
 
-	if mockParams.Mocked {
-		pushService = nacos.NewMockNacosService(mockParams)
-	}
+	pushService.constructServices()
 
-	nacosMcpService := &NacosMcpService{
+	go pushService.notifyServiceChange()
+
+	mcpService := &McpService{
 		clients: map[string]*Connection{},
 		// Use Mock service :
-		nacosPushService: pushService,
+		service: pushService,
 	}
 
-	nacosMcpService.initGrpcServer()
+	mcpService.initGrpcServer()
 
-	mcp.RegisterResourceSourceServer(nacosMcpService.grpcServer, nacosMcpService)
+	mcp.RegisterResourceSourceServer(mcpService.grpcServer, mcpService)
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	nacosMcpService.nacosPushService.SubscribeAllServices(func(resources *v1alpha1.Resources, err error) {
+	mcpService.service.SubscribeAllServices(func(resources *v1alpha1.Resources, err error) {
 
 		if err != nil {
 			log.Println("subscribe error", err)
 			return
 		}
 
-		if len(nacosMcpService.clients) == 0 {
+		if len(mcpService.clients) == 0 {
 			return
 		}
 
-		for _, con := range nacosMcpService.clients {
+		for _, con := range mcpService.clients {
 
 			if con.LastRequestAcked == false {
 				log.Println("Last request not finished, ignore.")
@@ -146,13 +271,13 @@ func NewService(addr string, mockParams common.MockParams) *NacosMcpService {
 			con.LastRequestAcked = false
 		}
 
-		nacosMcpService.SendAll(resources)
+		mcpService.SendAll(resources)
 
 	})
 
-	go nacosMcpService.grpcServer.Serve(lis)
+	go mcpService.grpcServer.Serve(lis)
 
-	return nacosMcpService
+	return mcpService
 }
 
 type Stream interface {
@@ -163,7 +288,7 @@ type Stream interface {
 
 	Context() context.Context
 
-	Process(s *NacosMcpService, con *Connection, message proto.Message) error
+	Process(s *McpService, con *Connection, message proto.Message) error
 }
 
 type mcpStream struct {
@@ -196,7 +321,7 @@ func (mcps *mcpStream) Context() context.Context {
 //  metadata struct -> Annotations
 //  TypeUrl -> Collection
 //  no on-demand (Watched)
-func (mcps *mcpStream) Process(s *NacosMcpService, con *Connection, msg proto.Message) error {
+func (mcps *mcpStream) Process(s *McpService, con *Connection, msg proto.Message) error {
 
 	req := msg.(*mcp.RequestResources)
 	if !con.active {
@@ -273,11 +398,11 @@ func (mcps *mcpStream) Process(s *NacosMcpService, con *Connection, msg proto.Me
 	return nil
 }
 
-func (s *NacosMcpService) getAllResources() (r *v1alpha1.Resources) {
-	return s.nacosPushService.Resources
+func (s *McpService) getAllResources() (r *v1alpha1.Resources) {
+	return s.service.Resources
 }
 
-func (s *NacosMcpService) EstablishResourceStream(mcps mcp.ResourceSource_EstablishResourceStreamServer) error {
+func (s *McpService) EstablishResourceStream(mcps mcp.ResourceSource_EstablishResourceStreamServer) error {
 
 	log.Println("establish resource stream.....")
 
@@ -315,7 +440,7 @@ func (s *NacosMcpService) EstablishResourceStream(mcps mcp.ResourceSource_Establ
 }
 
 // Push a single resource type on the connection. This is blocking.
-func (s *NacosMcpService) push(con *Connection, rtype string, res []string) error {
+func (s *McpService) push(con *Connection, rtype string, res []string) error {
 	h, f := resourceHandler[rtype]
 	log.Println("push", rtype, f)
 	if !f {
@@ -329,19 +454,19 @@ func (s *NacosMcpService) push(con *Connection, rtype string, res []string) erro
 }
 
 // IncrementalAggregatedResources is not implemented.
-func (s *NacosMcpService) DeltaAggregatedResources(stream ads.AggregatedDiscoveryService_DeltaAggregatedResourcesServer) error {
+func (s *McpService) DeltaAggregatedResources(stream ads.AggregatedDiscoveryService_DeltaAggregatedResourcesServer) error {
 	return status.Errorf(codes.Unimplemented, "not implemented")
 }
 
 // Callbacks from the lower layer
 
-func (s *NacosMcpService) initGrpcServer() {
+func (s *McpService) initGrpcServer() {
 	grpcOptions := s.grpcServerOptions()
 	s.grpcServer = grpc.NewServer(grpcOptions...)
 
 }
 
-func (s *NacosMcpService) grpcServerOptions() []grpc.ServerOption {
+func (s *McpService) grpcServerOptions() []grpc.ServerOption {
 	interceptors := []grpc.UnaryServerInterceptor{
 		// setup server prometheus monitoring (as final interceptor in chain)
 		grpcprometheus.UnaryServerInterceptor,
@@ -364,7 +489,7 @@ func (s *NacosMcpService) grpcServerOptions() []grpc.ServerOption {
 	return grpcOptions
 }
 
-func (fx *NacosMcpService) SendAll(r *v1alpha1.Resources) {
+func (fx *McpService) SendAll(r *v1alpha1.Resources) {
 
 	//log.Println("current clients", fx.clients)
 	for _, con := range fx.clients {
@@ -377,16 +502,19 @@ func (fx *NacosMcpService) SendAll(r *v1alpha1.Resources) {
 
 }
 
-func (fx *NacosMcpService) Send(con *Connection, rtype string, r *v1alpha1.Resources) error {
+func (fx *McpService) Send(con *Connection, rtype string, r *v1alpha1.Resources) error {
+	log.Println("sending resources", r)
+	if r == nil {
+		return nil
+	}
+
 	r.Nonce = fmt.Sprintf("%v", time.Now())
 	con.NonceSent[rtype] = r.Nonce
-
-	//log.Println("sending resources", r)
 
 	return con.Stream.Send(r)
 }
 
-func (s *NacosMcpService) connectionID(node string) string {
+func (s *McpService) connectionID(node string) string {
 	s.mutex.Lock()
 	s.connectionNumber++
 	c := s.connectionNumber

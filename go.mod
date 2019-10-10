@@ -1,4 +1,4 @@
-module github.com/nacos-group/nacos-istio
+module github.com/howardjohn/mcp-load
 
 go 1.13
 
