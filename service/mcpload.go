@@ -140,26 +140,14 @@ func (mockService *MockService) constructServices() {
 	totalInstanceCount := 0
 
 	labels := make(map[string]string)
-	labels["p"] = "hessian2"
-	labels["ROUTE"] = "0"
-	labels["APP"] = "ump"
-	labels["st"] = "na62"
-	labels["v"] = "2.0"
-	labels["TIMEOUT"] = "3000"
-	labels["ih2"] = "y"
-	labels["mg"] = "ump2_searchhost"
-	labels["WRITE_MODE"] = "unit"
-	labels["CONNECTTIMEOUT"] = "1000"
-	labels["SERIALIZETYPE"] = "hessian"
-	labels["ut"] = "UNZBMIX25G"
+	labels["test"] = "howardjohn"
 
 	for count := 0; count < mockService.MockParams.MockServiceCount; count++ {
 
 		svcName := "mock.service." + strconv.Itoa(count)
 		se := &v1alpha3.ServiceEntry{
 			Hosts:      []string{svcName + ".nacos"},
-			Resolution: v1alpha3.ServiceEntry_DNS,
-			Location:   1,
+			Resolution: v1alpha3.ServiceEntry_STATIC,
 			Ports:      []*v1alpha3.Port{port},
 		}
 
@@ -225,7 +213,7 @@ func (mockService *MockService) notifyServiceChange() {
 }
 
 // NewService initialized MCP servers.
-func NewService(addr string, mockParams common.MockParams) *McpService {
+func NewService(addr string, mockParams common.MockParams) error {
 
 	pushService := &MockService{
 		MockParams: mockParams,
@@ -275,9 +263,7 @@ func NewService(addr string, mockParams common.MockParams) *McpService {
 
 	})
 
-	go mcpService.grpcServer.Serve(lis)
-
-	return mcpService
+	return mcpService.grpcServer.Serve(lis)
 }
 
 type Stream interface {

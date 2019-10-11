@@ -28,7 +28,6 @@ func main() {
 		MockPushDelay:        *mockPushDelay,
 	}
 
-	a := service.NewService(*grpcAddr, *mockParams)
-
-	log.Println("Starting", a, "mock:", mockParams)
+	err := service.NewService(*grpcAddr, *mockParams)
+	log.Println("Exited with error", err)
 }

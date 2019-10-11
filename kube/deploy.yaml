@@ -18,7 +18,8 @@ spec:
         imagePullPolicy: Always
         image: gcr.io/howardjohn-istio/mcp-load
         args:
-        - --services=10
+        - --services=1
+        - --endpoints=100000
         - --delay=10
         resources:
           requests:
@@ -36,7 +37,7 @@ metadata:
     app: mcp
 spec:
   ports:
-  - port: 18848
+  - port: 9901
     name: grpc
   selector:
     app: mcp

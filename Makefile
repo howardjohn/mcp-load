@@ -22,4 +22,3 @@ push:
 .PHONY: deploy
 deploy:
 	kubectl apply -f kube
-
