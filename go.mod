@@ -4,7 +4,7 @@ go 1.13
 
 require (
 	github.com/envoyproxy/go-control-plane v0.9.0
-	github.com/gogo/protobuf v1.3.0
+	github.com/gogo/protobuf v1.3.2
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/nacos-group/nacos-sdk-go v0.0.0-20190820112454-5245ea3cded6
